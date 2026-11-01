@@ -1,0 +1,10 @@
+name: mobile
+description: Violates every rule, so that check.sh can prove the plugin loads and reports.
+publish_to: none
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  auto_route:
+    path: auto_route
