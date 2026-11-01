@@ -11,7 +11,7 @@ The rules name that app's paths and classes, so this is not a general package. I
 
 ## Changing something
 
-CI runs `./check.sh` on every push. In `cb-mobile`, move the commit in `analysis_options.yaml` and in
+CI runs `./check.sh` on every push, which also proves the plugin loads: `fixture/` breaks every rule and must draw them all. A new rule needs a violation there and a line in `check.sh`. In `cb-mobile`, move the commit in `analysis_options.yaml` and in
 `tool/pubspec.yaml`, run `dart pub upgrade cb_checks` in `tool/`, and run a bare `fvm dart analyze` from the
 root. A plugin rule reports only when the target is the package root: `dart analyze lib` prints no plugin
 warnings at all. Pin full commit SHAs, as a tag can move.

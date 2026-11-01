@@ -1,0 +1,3 @@
+plugins:
+  cb_lints:
+    path: ../cb_lints
