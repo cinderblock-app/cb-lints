@@ -16,6 +16,16 @@ only when the target is the package root: `dart analyze lib` prints no plugin wa
 `cb_lints/pubspec.yaml` pins `analysis_server_plugin`, `analyzer` and `analyzer_plugin` to exact versions,
 which move together and follow the Dart SDK, so a Flutter bump in `cb-mobile` can need a release here first.
 
+## Auto-fixes
+
+- `reader_without_ignore_no_connection` has a quick fix in the IDE. Plugin fixes cannot be applied in bulk,
+  so `dart fix` does not see it.
+- `docs-check --fix` points a reference at its file when exactly one file has that name.
+- `proto-optional-check --update` records new optional fields.
+
+The rest need a person: naming a capability, routing a write through an Operation, moving a page and its
+imports, writing a decoder, or finding what a renamed file or name is called now.
+
 ## What stays in cb-mobile
 
 The rules name `cb-mobile`'s paths, and its `docs_check.yaml` and `optional_fields.json` hold what is

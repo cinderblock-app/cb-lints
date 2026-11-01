@@ -114,4 +114,51 @@ snapshots:
       expect(_stale('`ConnectivityService.isOffline`'), <String>['ConnectivityService.isOffline']);
     });
   });
+
+  group('movedPath', () {
+    const Set<String> files = <String>{'docs/architecture.md', 'tools/new/run.sh', 'a/index.dart', 'b/index.dart'};
+
+    DocReference reference(String token, {String file = 'docs/a.md', bool isPath = true}) {
+      return DocReference(file: file, line: 1, token: token, isPath: isPath);
+    }
+
+    test('finds a file with a unique name', () {
+      expect(movedPath(reference('tools/run.sh'), files), 'tools/new/run.sh');
+    });
+
+    test('keeps a link relative to its doc', () {
+      expect(movedPath(reference('../run.sh', file: 'docs/redux/a.md'), files), '../../tools/new/run.sh');
+    });
+
+    test('leaves a name several files have', () {
+      expect(movedPath(reference('lib/index.dart'), files), isNull);
+    });
+
+    test('leaves a name no file has', () {
+      expect(movedPath(reference('tools/gone.sh'), files), isNull);
+    });
+
+    test('leaves a code name', () {
+      expect(movedPath(reference('run.sh', isPath: false), files), isNull);
+    });
+  });
+
+  group('replaceReference', () {
+    const DocReference reference = DocReference(file: 'docs/a.md', line: 2, token: 'tools/run.sh', isPath: true);
+
+    test('replaces only on its line, with any line number', () {
+      const String markdown = '`tools/run.sh`\nSee `tools/run.sh:12` and `tools/run.sh`.\n';
+
+      expect(
+        replaceReference(markdown, reference, 'tools/new/run.sh'),
+        '`tools/run.sh`\nSee `tools/new/run.sh` and `tools/new/run.sh`.\n',
+      );
+    });
+
+    test('leaves a longer path alone', () {
+      const String markdown = '\n`tools/run.sh.bak`\n';
+
+      expect(replaceReference(markdown, reference, 'x'), markdown);
+    });
+  });
 }

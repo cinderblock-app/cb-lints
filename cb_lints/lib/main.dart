@@ -1,5 +1,6 @@
 import 'package:analysis_server_plugin/plugin.dart';
 import 'package:analysis_server_plugin/registry.dart';
+import 'package:cb_lints/src/add_ignore_no_connection.dart';
 import 'package:cb_lints/src/api_class_in_presentation.dart';
 import 'package:cb_lints/src/platform_check_outside_platform_support.dart';
 import 'package:cb_lints/src/reader_without_ignore_no_connection.dart';
@@ -20,6 +21,7 @@ class CbLintsPlugin extends Plugin {
     registry.registerWarningRule(ApiClassInPresentation());
     registry.registerWarningRule(PlatformCheckOutsidePlatformSupport());
     registry.registerWarningRule(ReaderWithoutIgnoreNoConnection());
+    registry.registerFixForRule(ReaderWithoutIgnoreNoConnection.code, AddIgnoreNoConnection.new);
     registry.registerWarningRule(RoutePageOutsidePages());
   }
 }
