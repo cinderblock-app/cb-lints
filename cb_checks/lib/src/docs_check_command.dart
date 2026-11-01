@@ -12,6 +12,14 @@ import 'package:yaml/yaml.dart';
 /// A name is only checked to appear somewhere outside the docs, as a whole word.
 /// `Foo.bar` passes if both words exist, even if `bar` has moved off `Foo`.
 class DocsCheckCommand extends Command<int> {
+  DocsCheckCommand() {
+    argParser.addFlag(
+      'fix',
+      negatable: false,
+      help: 'Point a reference at its file when that file moved, which only its name can show.',
+    );
+  }
+
   @override
   String get name => 'docs-check';
 
@@ -58,9 +66,10 @@ class DocsCheckCommand extends Command<int> {
     );
     final List<DocReference> notAllowed = stale.where((DocReference it) => !config.allowed.contains(it.token)).toList();
     final Set<String> ignored = _gitIgnored(notAllowed.where((DocReference it) => it.isPath));
-    final List<DocReference> problems = notAllowed
-        .where((DocReference it) => !ignored.contains(_normalized(it)))
-        .toList();
+    List<DocReference> problems = notAllowed.where((DocReference it) => !ignored.contains(_normalized(it))).toList();
+    if (argResults!.flag('fix')) {
+      problems = _fix(problems, files);
+    }
 
     for (final DocReference problem in problems) {
       stderr.writeln('${problem.file}:${problem.line}: `${problem.token}` no longer exists.');
@@ -71,6 +80,49 @@ class DocsCheckCommand extends Command<int> {
     stdout.writeln('docs-check: ${references.length} references, none stale.');
     return 0;
   }
+}
+
+/// Rewrites the [problems] whose file moved, and returns the rest.
+List<DocReference> _fix(List<DocReference> problems, Set<String> files) {
+  final List<DocReference> remaining = <DocReference>[];
+  for (final DocReference problem in problems) {
+    final String? moved = movedPath(problem, files);
+    if (moved == null) {
+      remaining.add(problem);
+      continue;
+    }
+    final File doc = File(problem.file);
+    doc.writeAsStringSync(replaceReference(doc.readAsStringSync(), problem, moved));
+    stdout.writeln('${problem.file}:${problem.line}: `${problem.token}` is now `$moved`.');
+  }
+  return remaining;
+}
+
+/// Where the file of a stale path [reference] went, if exactly one file in
+/// [files] has its name. With several, or none, only a person can tell.
+///
+/// A link relative to its doc stays relative.
+String? movedPath(DocReference reference, Set<String> files) {
+  if (!reference.isPath) {
+    return null;
+  }
+  final String name = p.basename(reference.token);
+  final List<String> candidates = files.where((String it) => p.basename(it) == name).toList();
+  if (candidates.length != 1) {
+    return null;
+  }
+  return reference.token.startsWith('../')
+      ? p.relative(candidates.single, from: p.dirname(reference.file))
+      : candidates.single;
+}
+
+/// [markdown] with [reference] replaced on its line. A line number in the old
+/// reference goes too, as it said nothing about where the file is now.
+String replaceReference(String markdown, DocReference reference, String replacement) {
+  final List<String> lines = markdown.split('\n');
+  final RegExp old = RegExp('`${RegExp.escape(reference.token)}(:\\d+(-\\d+)?)?`');
+  lines[reference.line - 1] = lines[reference.line - 1].replaceAll(old, '`$replacement`');
+  return lines.join('\n');
 }
 
 /// What a repo's `docs_check.yaml` says about its own docs.
