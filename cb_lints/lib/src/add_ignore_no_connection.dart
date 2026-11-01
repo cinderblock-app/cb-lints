@@ -60,9 +60,10 @@ List<IgnoreNoConnectionInsertion>? ignoreNoConnectionInsertions(Expression expre
   if (goesThroughIgnoreNoConnection(expression)) {
     return <IgnoreNoConnectionInsertion>[];
   }
+  if (startsFromAwait(expression)) {
+    return null;
+  }
   switch (expression) {
-    case AwaitExpression():
-      return null;
     case ConditionalExpression():
       final List<IgnoreNoConnectionInsertion>? then = ignoreNoConnectionInsertions(expression.thenExpression, eol: eol);
       final List<IgnoreNoConnectionInsertion>? otherwise = ignoreNoConnectionInsertions(

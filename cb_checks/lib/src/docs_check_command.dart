@@ -191,8 +191,8 @@ class DocsCheckConfig {
   factory DocsCheckConfig.parse(String source) {
     final YamlMap yaml = loadYaml(source) as YamlMap;
     return DocsCheckConfig(
-      allowed: <String>{...(yaml['allowed'] as YamlList).cast<String>()},
-      snapshots: <String>{...(yaml['snapshots'] as YamlList).cast<String>()},
+      allowed: <String>{...?(yaml['allowed'] as YamlList?)?.cast<String>()},
+      snapshots: <String>{...?(yaml['snapshots'] as YamlList?)?.cast<String>()},
     );
   }
 
@@ -322,13 +322,17 @@ List<DocReference> findStaleReferences({
 }
 
 /// Every word in the tracked source, leaving out the docs so that a doc cannot
-/// vouch for itself, and private/, which is encrypted outside a worktree that
-/// has unlocked it.
+/// vouch for itself, the allowlist, which would vouch for anything built on a name
+/// it lists, and private/, which is encrypted outside a worktree that has unlocked
+/// it.
 Set<String> _sourceWords(List<String> tracked) {
   const int largestFile = 4 * 1024 * 1024;
   final Set<String> words = <String>{};
   for (final String path in tracked) {
-    if (path.endsWith('.md') || path.startsWith('private/') || path.startsWith('third_party/')) {
+    if (path.endsWith('.md') ||
+        path == 'docs_check.yaml' ||
+        path.startsWith('private/') ||
+        path.startsWith('third_party/')) {
       continue;
     }
     final File file = File(path);

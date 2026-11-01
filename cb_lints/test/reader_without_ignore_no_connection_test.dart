@@ -91,6 +91,10 @@ class ReaderWithoutIgnoreNoConnectionTest extends AnalysisRuleTest {
     await _assertLinted(_reader('    yield* flag ? api().ignoreNoConnection() : api();'));
   }
 
+  Future<void> test_guardAfterAwait() async {
+    await _assertLinted(_reader('    yield* (await Future<Stream<int>>.value(api())).ignoreNoConnection();'));
+  }
+
   Future<void> test_plainYield() async {
     await assertNoDiagnosticsInFile(_write(_syncEnginePath, _reader('    yield 2;')));
   }

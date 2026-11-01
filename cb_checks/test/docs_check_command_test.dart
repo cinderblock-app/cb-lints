@@ -84,6 +84,15 @@ snapshots:
     });
   });
 
+  group('DocsCheckConfig sections', () {
+    test('treats an empty or missing section as empty', () {
+      final DocsCheckConfig config = DocsCheckConfig.parse('allowed:\n');
+
+      expect(config.allowed, isEmpty);
+      expect(config.snapshots, isEmpty);
+    });
+  });
+
   group('findStaleReferences', () {
     test('accepts existing files, folders and partial paths', () {
       expect(_stale('`tools/run.sh` `./tools/run.sh` `lib/src/data/` `persistence/entity_converters.dart`'), isEmpty);
@@ -248,6 +257,18 @@ snapshots:
 
       expect(File('${repo.path}/CLAUDE.md').readAsStringSync(), '`tools/run2.sh` and `tools/gone.sh`\n');
       expect(result.stderr, contains('`tools/gone.sh` no longer exists'));
+      expect(result.exitCode, 1);
+    });
+
+    test('does not let the allowlist vouch for a name built on one it lists', () {
+      File('${repo.path}/docs_check.yaml').writeAsStringSync('allowed:\n  - GoneThing\nsnapshots: []\n');
+      File('${repo.path}/tools/code.dart').writeAsStringSync('void aLiveMember() {}\n');
+      File('${repo.path}/CLAUDE.md').writeAsStringSync('`GoneThing` and `GoneThing.aLiveMember`\n');
+
+      final ProcessResult result = check();
+
+      expect(result.stderr, contains('`GoneThing.aLiveMember` no longer exists'));
+      expect(result.stderr, isNot(contains('`GoneThing` no')));
       expect(result.exitCode, 1);
     });
 
