@@ -60,7 +60,11 @@ class _Visitor extends SimpleAstVisitor<void> {
 
   @override
   void visitYieldStatement(YieldStatement node) {
-    if (node.star == null || !_isInReader(node) || _goesThroughIgnoreNoConnection(node.expression)) {
+    if (node.star == null || !_isInReader(node) || goesThroughIgnoreNoConnection(node.expression)) {
+      return;
+    }
+    // A `sync*` helper yields an Iterable, which the call does not exist on.
+    if (!(node.thisOrAncestorOfType<FunctionBody>()?.isAsynchronous ?? false)) {
       return;
     }
     rule.reportAtToken(node.yieldKeyword);
@@ -70,29 +74,31 @@ class _Visitor extends SimpleAstVisitor<void> {
     final String? name = node.thisOrAncestorOfType<ClassDeclaration>()?.declaredFragment?.element.name;
     return name != null && name.endsWith('Reader');
   }
+}
 
-  /// Follows the call chain only: a call inside a closure further up, such as
-  /// in an `asyncMap`, does not guard the stream being yielded.
-  bool _goesThroughIgnoreNoConnection(Expression expression) {
-    Expression? current = expression;
-    while (current != null) {
-      switch (current) {
-        case MethodInvocation():
-          if (current.methodName.name == 'ignoreNoConnection') {
-            return true;
-          }
-          current = current.target;
-        case ParenthesizedExpression():
-          current = current.expression;
-        case PropertyAccess():
-          current = current.target;
-        case ConditionalExpression():
-          return _goesThroughIgnoreNoConnection(current.thenExpression) &&
-              _goesThroughIgnoreNoConnection(current.elseExpression);
-        default:
-          return false;
-      }
+/// Whether the stream [expression] gives goes through `ignoreNoConnection()`.
+///
+/// Follows the call chain only: a call inside a closure further up, such as in
+/// an `asyncMap`, does not guard the stream being yielded.
+bool goesThroughIgnoreNoConnection(Expression expression) {
+  Expression? current = expression;
+  while (current != null) {
+    switch (current) {
+      case MethodInvocation():
+        if (current.methodName.name == 'ignoreNoConnection') {
+          return true;
+        }
+        current = current.target;
+      case ParenthesizedExpression():
+        current = current.expression;
+      case PropertyAccess():
+        current = current.target;
+      case ConditionalExpression():
+        return goesThroughIgnoreNoConnection(current.thenExpression) &&
+            goesThroughIgnoreNoConnection(current.elseExpression);
+      default:
+        return false;
     }
-    return false;
   }
+  return false;
 }

@@ -16,7 +16,7 @@ class DocsCheckCommand extends Command<int> {
     argParser.addFlag(
       'fix',
       negatable: false,
-      help: 'Point a reference at its file when that file moved, which only its name can show.',
+      help: 'Point a reference at its file when git recorded that file moving.',
     );
   }
 
@@ -82,47 +82,106 @@ class DocsCheckCommand extends Command<int> {
   }
 }
 
-/// Rewrites the [problems] whose file moved, and returns the rest.
+/// Rewrites the [problems] whose file git saw move, and returns the rest.
 List<DocReference> _fix(List<DocReference> problems, Set<String> files) {
+  final Map<String, String> renames = parseRenames(<String>[
+    ..._git(<String>['log', '-M', '--diff-filter=R', '--name-status', '--format=', '--reverse']),
+    ..._git(<String>['diff', '-M', '--diff-filter=R', '--name-status', 'HEAD']),
+  ]);
   final List<DocReference> remaining = <DocReference>[];
+  final Map<String, List<DocReference>> byDoc = <String, List<DocReference>>{};
   for (final DocReference problem in problems) {
-    final String? moved = movedPath(problem, files);
-    if (moved == null) {
-      remaining.add(problem);
-      continue;
-    }
-    final File doc = File(problem.file);
-    doc.writeAsStringSync(replaceReference(doc.readAsStringSync(), problem, moved));
-    stdout.writeln('${problem.file}:${problem.line}: `${problem.token}` is now `$moved`.');
+    (movedPath(problem, renames, files) == null ? remaining : byDoc.putIfAbsent(problem.file, () => <DocReference>[]))
+        .add(problem);
   }
+  byDoc.forEach((String path, List<DocReference> references) {
+    final File doc = File(path);
+    final String before = doc.readAsStringSync();
+    String after = before;
+    for (final DocReference reference in references) {
+      final String moved = movedPath(reference, renames, files)!;
+      final String replaced = replaceReference(after, reference, moved);
+      if (replaced == after) {
+        remaining.add(reference);
+        continue;
+      }
+      after = replaced;
+      stdout.writeln('${reference.file}:${reference.line}: `${reference.token}` is now `$moved`.');
+    }
+    if (after != before) {
+      doc.writeAsStringSync(after);
+    }
+  });
   return remaining;
 }
 
-/// Where the file of a stale path [reference] went, if exactly one file in
-/// [files] has its name. With several, or none, only a person can tell.
-///
-/// A link relative to its doc stays relative.
-String? movedPath(DocReference reference, Set<String> files) {
-  if (!reference.isPath) {
-    return null;
+/// Old path to current path, from lines of `git log --name-status`, oldest
+/// first, following a file through several renames.
+Map<String, String> parseRenames(List<String> lines) {
+  final Map<String, String> renames = <String, String>{};
+  for (final String line in lines) {
+    final List<String> parts = line.split('\t');
+    if (parts.length != 3 || !parts.first.startsWith('R')) {
+      continue;
+    }
+    final String from = parts[1];
+    final String to = parts[2];
+    renames.updateAll((String _, String current) => current == from ? to : current);
+    renames[from] = to;
   }
-  final String name = p.basename(reference.token);
-  final List<String> candidates = files.where((String it) => p.basename(it) == name).toList();
-  if (candidates.length != 1) {
-    return null;
-  }
-  return reference.token.startsWith('../')
-      ? p.relative(candidates.single, from: p.dirname(reference.file))
-      : candidates.single;
+  return renames;
 }
 
-/// [markdown] with [reference] replaced on its line. A line number in the old
-/// reference goes too, as it said nothing about where the file is now.
+/// Where a stale path [reference] went, if [renames] shows exactly one place and
+/// that file is in [files]. A file of the same name proves nothing: it may be an
+/// unrelated one, and the reference would become a wrong claim no check catches.
+String? movedPath(DocReference reference, Map<String, String> renames, Set<String> files) {
+  if (!reference.isPath || reference.token.endsWith('/')) {
+    return null;
+  }
+  final String path = _normalized(reference);
+  if (path.startsWith('..')) {
+    return null;
+  }
+  final Set<String> targets = renames.entries
+      .where((MapEntry<String, String> it) => it.key == path || it.key.endsWith('/$path'))
+      .map((MapEntry<String, String> it) => it.value)
+      .where(files.contains)
+      .toSet();
+  if (targets.length != 1) {
+    return null;
+  }
+  // A link stays relative while it still climbs. Below its doc, a bare path would
+  // read as a suffix to match anywhere, so it takes the whole path.
+  final String relative = p.relative(targets.single, from: p.dirname(reference.file));
+  return reference.token.startsWith('../') && relative.startsWith('../') ? relative : targets.single;
+}
+
+/// [markdown] with [reference] replaced on its line, numbered as
+/// [extractReferences] numbers them. A line number in the old reference goes too,
+/// as it said nothing about where the file is now.
 String replaceReference(String markdown, DocReference reference, String replacement) {
-  final List<String> lines = markdown.split('\n');
-  final RegExp old = RegExp('`${RegExp.escape(reference.token)}(:\\d+(-\\d+)?)?`');
-  lines[reference.line - 1] = lines[reference.line - 1].replaceAll(old, '`$replacement`');
-  return lines.join('\n');
+  int start = 0;
+  int number = 1;
+  for (final Match lineEnd in RegExp(r'\r\n|\r|\n').allMatches(markdown)) {
+    if (number == reference.line) {
+      return markdown.replaceRange(
+        start,
+        lineEnd.start,
+        _replaced(markdown.substring(start, lineEnd.start), reference, replacement),
+      );
+    }
+    start = lineEnd.end;
+    number++;
+  }
+  return number == reference.line
+      ? markdown.replaceRange(start, markdown.length, _replaced(markdown.substring(start), reference, replacement))
+      : markdown;
+}
+
+String _replaced(String line, DocReference reference, String replacement) {
+  final RegExp old = RegExp('`${RegExp.escape(reference.token)}(${_lineSuffix.pattern.replaceFirst(r'$', '')})?`');
+  return line.replaceAll(old, '`$replacement`');
 }
 
 /// What a repo's `docs_check.yaml` says about its own docs.
