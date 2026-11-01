@@ -1,19 +1,20 @@
 # cb-lints
 
-Cinderblock's own analyzer rules and repo checks, moved out of `cb-mobile`, which pins a tag of this repo.
+Cinderblock's own analyzer rules and repo checks, moved out of `cb-mobile`, which pins a commit of this repo.
 The rules name that app's paths and classes, so this is not a general package. It is public so that
 `dart analyze` can fetch the plugin with no credentials. It has no licence.
 
 - `cb_lints/` is the analyzer plugin. `cb-mobile` enables it in `analysis_options.yaml`, with a `git:`
   source, so its rules report in `dart analyze` and the IDE.
-- `cb_checks/` is a command line tool with `docs-check` and `proto-optional-check`. `cb-mobile` runs them
-  through `tools/cb_checks.sh`, which reads the same tag.
+- `cb_checks/` holds `docs-check` and `proto-optional-check`. `cb-mobile` depends on it from `tool/`, whose
+  committed lockfile pins the commit, and registers both in `tool/bin/tools.dart`.
 
 ## Changing something
 
-Run `./check.sh`, which is also the only thing that tests this repo. Tag the commit, then move the tag in
-`cb-mobile`'s `analysis_options.yaml`, and run a bare `dart analyze` from its root. A plugin rule reports
-only when the target is the package root: `dart analyze lib` prints no plugin warnings at all.
+CI runs `./check.sh` on every push. In `cb-mobile`, move the commit in `analysis_options.yaml` and in
+`tool/pubspec.yaml`, run `dart pub upgrade cb_checks` in `tool/`, and run a bare `fvm dart analyze` from the
+root. A plugin rule reports only when the target is the package root: `dart analyze lib` prints no plugin
+warnings at all. Pin full commit SHAs, as a tag can move.
 
 `cb_lints/pubspec.yaml` pins `analysis_server_plugin`, `analyzer` and `analyzer_plugin` to exact versions,
 which move together and follow the Dart SDK, so a Flutter bump in `cb-mobile` can need a release here first.

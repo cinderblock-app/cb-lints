@@ -154,7 +154,7 @@ List<String> checkOptionalFields({
   if (unrecorded.isNotEmpty) {
     problems.add(
       '${unrecorded.length} optional fields are not in the ledger (${unrecorded.take(5).join(', ')}). '
-      'Run: tools/cb_checks.sh proto-optional-check --update',
+      'Run: fvm dart run tool/bin/tools.dart proto-optional-check --update',
     );
   }
 

@@ -16,7 +16,7 @@ import 'package:analyzer/error/error.dart';
 class ReaderWithoutIgnoreNoConnection extends AnalysisRule {
   static const LintCode code = LintCode(
     'reader_without_ignore_no_connection',
-    'A SyncEngine reader must end its stream with ignoreNoConnection(), or reads fail instead of degrading offline.',
+    'A SyncEngine reader must send its stream through ignoreNoConnection(), or reads fail instead of degrading offline.',
     correctionMessage: 'Try adding .ignoreNoConnection() to this stream.',
     severity: DiagnosticSeverity.WARNING,
   );
@@ -86,7 +86,7 @@ bool goesThroughIgnoreNoConnection(Expression expression) {
     switch (current) {
       case MethodInvocation():
         if (current.methodName.name == 'ignoreNoConnection') {
-          return true;
+          return !startsFromAwait(current.target);
         }
         current = current.target;
       case ParenthesizedExpression():
@@ -96,6 +96,27 @@ bool goesThroughIgnoreNoConnection(Expression expression) {
       case ConditionalExpression():
         return goesThroughIgnoreNoConnection(current.thenExpression) &&
             goesThroughIgnoreNoConnection(current.elseExpression);
+      default:
+        return false;
+    }
+  }
+  return false;
+}
+
+/// Whether the chain in [expression] starts from an `await`, which throws offline
+/// before there is a stream for `ignoreNoConnection()` to guard.
+bool startsFromAwait(Expression? expression) {
+  Expression? current = expression;
+  while (current != null) {
+    switch (current) {
+      case AwaitExpression():
+        return true;
+      case MethodInvocation():
+        current = current.target;
+      case ParenthesizedExpression():
+        current = current.expression;
+      case PropertyAccess():
+        current = current.target;
       default:
         return false;
     }

@@ -69,5 +69,7 @@ void main() {
   test('offers nothing for an await, which throws before there is a stream', () {
     expect(_fixed('yield* await stream();'), isNull);
     expect(_fixed('yield* flag ? a() : await stream();'), isNull);
+    expect(_fixed('yield* (await stream());'), isNull);
+    expect(_fixed('yield* (await stream()).notEquals(1);'), isNull);
   });
 }
