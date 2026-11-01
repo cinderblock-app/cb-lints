@@ -1,0 +1,21 @@
+name: cb_lints
+description: Analyzer plugin with the app's own rules, enabled from the root analysis_options.yaml.
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  # analysis_server_plugin pins analyzer and analyzer_plugin to exact versions, and the
+  # analysis server resolves this package with `dart pub upgrade`, so the three move together.
+  # Dart 3.13 accepts analysis_server_plugin ^0.3.8.
+  analysis_server_plugin: 0.3.25
+  analyzer: 14.6.0
+  analyzer_plugin: 0.14.19
+
+dev_dependencies:
+  analyzer_testing: 0.4.4
+  lints: ^6.1.0
+  test: ^1.31.2
+  test_reflective_loader: ^0.6.0
