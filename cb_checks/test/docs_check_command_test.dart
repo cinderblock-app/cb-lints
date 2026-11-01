@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:test/test.dart';
 import 'package:cb_checks/src/docs_check_command.dart';
 
@@ -115,31 +117,62 @@ snapshots:
     });
   });
 
-  group('movedPath', () {
-    const Set<String> files = <String>{'docs/architecture.md', 'tools/new/run.sh', 'a/index.dart', 'b/index.dart'};
+  group('parseRenames', () {
+    test('follows a file through several renames', () {
+      expect(parseRenames(<String>['R100\ta.sh\tb.sh', 'M\tother.sh', 'R090\tb.sh\tc/d.sh']), <String, String>{
+        'a.sh': 'c/d.sh',
+        'b.sh': 'c/d.sh',
+      });
+    });
+  });
 
-    DocReference reference(String token, {String file = 'docs/a.md', bool isPath = true}) {
-      return DocReference(file: file, line: 1, token: token, isPath: isPath);
+  group('movedPath', () {
+    const Set<String> files = <String>{'tools/new/run.sh', 'docs/redux/near.md', 'third_party/x/gone.sh'};
+    const Map<String, String> renames = <String, String>{
+      'tools/run.sh': 'tools/new/run.sh',
+      'docs/near.md': 'docs/redux/near.md',
+      'tools/old.sh': 'tools/later_deleted.sh',
+      'one/same.sh': 'tools/new/run.sh',
+      'two/same.sh': 'docs/redux/near.md',
+    };
+
+    String? moved(String token, {String file = 'docs/a.md', bool isPath = true}) {
+      return movedPath(DocReference(file: file, line: 1, token: token, isPath: isPath), renames, files);
     }
 
-    test('finds a file with a unique name', () {
-      expect(movedPath(reference('tools/run.sh'), files), 'tools/new/run.sh');
+    test('follows a rename git recorded', () {
+      expect(moved('tools/run.sh'), 'tools/new/run.sh');
     });
 
-    test('keeps a link relative to its doc', () {
-      expect(movedPath(reference('../run.sh', file: 'docs/redux/a.md'), files), '../../tools/new/run.sh');
+    test('follows a rename from a partial path', () {
+      expect(moved('run.sh'), 'tools/new/run.sh');
     });
 
-    test('leaves a name several files have', () {
-      expect(movedPath(reference('lib/index.dart'), files), isNull);
+    test('keeps a link relative while it still climbs', () {
+      expect(moved('../run.sh', file: 'docs/redux/a.md'), isNull);
+      expect(moved('../tools/run.sh', file: 'docs/a.md'), '../tools/new/run.sh');
     });
 
-    test('leaves a name no file has', () {
-      expect(movedPath(reference('tools/gone.sh'), files), isNull);
+    test('gives the whole path once a link no longer climbs', () {
+      expect(moved('../near.md', file: 'docs/redux/a.md'), 'docs/redux/near.md');
     });
 
-    test('leaves a code name', () {
-      expect(movedPath(reference('run.sh', isPath: false), files), isNull);
+    test('leaves a deleted file that has a namesake', () {
+      expect(moved('tools/gone.sh'), isNull);
+    });
+
+    test('leaves a rename whose target is gone too', () {
+      expect(moved('tools/old.sh'), isNull);
+    });
+
+    test('leaves a path two renames could explain', () {
+      expect(moved('same.sh'), isNull);
+    });
+
+    test('leaves a folder, a link out of the repo and a code name', () {
+      expect(moved('tools/run.sh/'), isNull);
+      expect(moved('../../../run.sh', file: 'docs/redux/a.md'), isNull);
+      expect(moved('run.sh', isPath: false), isNull);
     });
   });
 
@@ -155,10 +188,78 @@ snapshots:
       );
     });
 
+    test('numbers lines as extractReferences does, keeping their endings', () {
+      const String markdown = 'first\r`tools/run.sh`\r\nthird';
+
+      expect(replaceReference(markdown, reference, 'x'), 'first\r`x`\r\nthird');
+    });
+
+    test('replaces on a last line with no ending', () {
+      expect(replaceReference('first\n`tools/run.sh`', reference, 'x'), 'first\n`x`');
+    });
+
     test('leaves a longer path alone', () {
       const String markdown = '\n`tools/run.sh.bak`\n';
 
       expect(replaceReference(markdown, reference, 'x'), markdown);
+    });
+  });
+
+  group('docs-check --fix', () {
+    late Directory repo;
+
+    ProcessResult git(List<String> arguments) {
+      final ProcessResult result = Process.runSync('git', arguments, workingDirectory: repo.path);
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      return result;
+    }
+
+    ProcessResult check() {
+      return Process.runSync(Platform.resolvedExecutable, <String>[
+        File('bin/cb_checks.dart').absolute.path,
+        'docs-check',
+        '--fix',
+      ], workingDirectory: repo.path);
+    }
+
+    setUp(() {
+      repo = Directory.systemTemp.createTempSync('docs_check');
+      git(<String>['init', '-q']);
+      git(<String>['config', 'user.email', 'a@example.com']);
+      git(<String>['config', 'user.name', 'a']);
+      File('${repo.path}/docs_check.yaml').writeAsStringSync('allowed: []\nsnapshots: []\n');
+      Directory('${repo.path}/tools').createSync();
+      Directory('${repo.path}/third_party').createSync();
+      File('${repo.path}/tools/run.sh').writeAsStringSync('#!/bin/sh\necho run\n' * 20);
+      File('${repo.path}/tools/gone.sh').writeAsStringSync('#!/bin/sh\necho gone\n' * 20);
+      File('${repo.path}/third_party/gone.sh').writeAsStringSync('unrelated\n');
+      File('${repo.path}/CLAUDE.md').writeAsStringSync('`tools/run.sh` and `tools/gone.sh`\n');
+      git(<String>['add', '-A']);
+      git(<String>['commit', '-qm', 'start']);
+    });
+
+    tearDown(() => repo.deleteSync(recursive: true));
+
+    test('rewrites a rename and fails on a deleted file with a namesake', () {
+      git(<String>['mv', 'tools/run.sh', 'tools/run2.sh']);
+      git(<String>['rm', '-q', 'tools/gone.sh']);
+
+      final ProcessResult result = check();
+
+      expect(File('${repo.path}/CLAUDE.md').readAsStringSync(), '`tools/run2.sh` and `tools/gone.sh`\n');
+      expect(result.stderr, contains('`tools/gone.sh` no longer exists'));
+      expect(result.exitCode, 1);
+    });
+
+    test('passes once every reference is fixed', () {
+      git(<String>['mv', 'tools/run.sh', 'tools/run2.sh']);
+      git(<String>['mv', 'tools/gone.sh', 'tools/here.sh']);
+      git(<String>['commit', '-qm', 'move']);
+
+      final ProcessResult result = check();
+
+      expect(File('${repo.path}/CLAUDE.md').readAsStringSync(), '`tools/run2.sh` and `tools/here.sh`\n');
+      expect(result.exitCode, 0, reason: '${result.stderr}');
     });
   });
 }

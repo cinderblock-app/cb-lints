@@ -95,6 +95,18 @@ class ReaderWithoutIgnoreNoConnectionTest extends AnalysisRuleTest {
     await assertNoDiagnosticsInFile(_write(_syncEnginePath, _reader('    yield 2;')));
   }
 
+  Future<void> test_syncGeneratorHelper() async {
+    await assertNoDiagnosticsInFile(
+      _write(_syncEnginePath, '''
+class TagsReader {
+  Iterable<int> ids() sync* {
+    yield* <int>[1];
+  }
+}
+'''),
+    );
+  }
+
   Future<void> test_classNotAReader() async {
     await assertNoDiagnosticsInFile(_write(_syncEnginePath, _reader('    yield* api();', name: 'TagsCache')));
   }
