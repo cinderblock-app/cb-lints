@@ -21,9 +21,15 @@ import 'package:args/command_runner.dart';
 ///
 /// Git history is not used because CI clones are shallow, so these are recorded in
 /// a ledger next to the proto. `--update` only ever records what cannot lose data:
-/// new optional fields, and new messages with their fields. It cannot hide either
-/// edit. To retire a decoder once no older database can be opened, delete the field
-/// from `compat` and `optional` by hand.
+/// new optional fields, new messages with their fields, and removed required
+/// fields, so that adding one back counts as new. It cannot hide either edit. A
+/// message that disappears fails until it is deleted from the ledger by hand, as
+/// renaming one keeps its rows. To retire a decoder once no older database can be
+/// opened, delete the field from `compat` and `optional`, and add it to `required`.
+///
+/// A decoder on a table's converter does not reach a copy of that message embedded
+/// in another blob, such as the entities inside a queued operation. This cannot see
+/// that, nor whether the decoder touches the field: it only asks that one exists.
 class ProtoOptionalCheckCommand extends Command<int> {
   ProtoOptionalCheckCommand() {
     argParser
@@ -31,7 +37,7 @@ class ProtoOptionalCheckCommand extends Command<int> {
       ..addOption(
         'ledger',
         defaultsTo: 'lib/src/data/sync_engine/proto/optional_fields.json',
-        help: 'Path to the ledger of fields that have been optional.',
+        help: 'Path to the ledger of what the proto has held.',
       )
       ..addOption(
         'converters',
@@ -39,9 +45,14 @@ class ProtoOptionalCheckCommand extends Command<int> {
         help: 'Path to the file declaring the entity converters.',
       )
       ..addFlag(
+        'init',
+        negatable: false,
+        help: 'Record everything in the proto as it is, on a ledger that has no messages yet. Once per ledger.',
+      )
+      ..addFlag(
         'update',
         negatable: false,
-        help: 'Record new optional fields and new messages. On a ledger that has no messages yet, record everything.',
+        help: 'Record new optional fields, new messages, and removed required fields.',
       );
   }
 
@@ -55,10 +66,26 @@ class ProtoOptionalCheckCommand extends Command<int> {
   Future<int> run() async {
     final File ledgerFile = File(argResults!.option('ledger')!);
     final ProtoFields fields = parseProtoFields(File(argResults!.option('proto')!).readAsStringSync());
-    final OptionalLedger ledger = OptionalLedger.parse(ledgerFile.readAsStringSync());
+    final bool init = argResults!.flag('init');
 
-    final OptionalLedger updated = argResults!.flag('update') ? ledger.updatedFrom(fields) : ledger;
-    if (argResults!.flag('update')) {
+    final OptionalLedger ledger;
+    try {
+      ledger = OptionalLedger.parse(ledgerFile.readAsStringSync(), partial: init);
+    } on FormatException catch (error) {
+      stderr.writeln('${ledgerFile.path}: ${error.message}');
+      return 1;
+    }
+    if (init && ledger.messages.isNotEmpty) {
+      stderr.writeln('${ledgerFile.path} already has messages. --init would accept everything in the proto as it is.');
+      return 1;
+    }
+
+    final OptionalLedger updated = init
+        ? ledger.initializedFrom(fields)
+        : argResults!.flag('update')
+        ? ledger.updatedFrom(fields)
+        : ledger;
+    if (init || argResults!.flag('update')) {
       ledgerFile.writeAsStringSync(updated.encode());
     }
 
@@ -95,6 +122,7 @@ class ProtoFields {
 }
 
 final RegExp _message = RegExp(r'^message (\w+)');
+final RegExp _oneof = RegExp(r'^\s+oneof \w+\s*\{');
 final RegExp _field = RegExp(r'^\s+(optional\s+)?([\w.]+)\s+(\w+)\s*=\s*\d+\s*;');
 
 ProtoFields parseProtoFields(String proto) {
@@ -103,6 +131,7 @@ ProtoFields parseProtoFields(String proto) {
   final Set<String> required = <String>{};
 
   String? message;
+  bool inOneof = false;
   for (final String line in const LineSplitter().convert(proto)) {
     final RegExpMatch? start = _message.firstMatch(line);
     if (start != null) {
@@ -115,6 +144,16 @@ ProtoFields parseProtoFields(String proto) {
       continue;
     }
     if (message == null) {
+      continue;
+    }
+    // An arm that a row never wrote decodes as not set, not as a zero, and `optional`
+    // cannot be written on one.
+    if (_oneof.hasMatch(line)) {
+      inOneof = true;
+      continue;
+    }
+    if (inOneof) {
+      inOneof = !line.trim().startsWith('}');
       continue;
     }
     final RegExpMatch? field = _field.firstMatch(line);
@@ -137,11 +176,20 @@ class OptionalLedger {
     this.zeroValueOk = const <String, String>{},
   });
 
-  factory OptionalLedger.parse(String json) {
+  /// Throws a [FormatException] on a missing section, unless [partial]: an empty
+  /// section means nothing to compare with, so a lost one must not pass for that.
+  factory OptionalLedger.parse(String json, {bool partial = false}) {
     final Map<String, dynamic> data = jsonDecode(json) as Map<String, dynamic>;
-    Set<String> names(String key) => <String>{...?(data[key] as List<dynamic>?)?.cast<String>()};
+    T? section<T>(String key) {
+      if (!partial && !data.containsKey(key)) {
+        throw FormatException('the ledger has no "$key" section');
+      }
+      return data[key] as T?;
+    }
+
+    Set<String> names(String key) => <String>{...?section<List<dynamic>>(key)?.cast<String>()};
     Map<String, String> entries(String key) => <String, String>{
-      ...?(data[key] as Map<String, dynamic>?)?.cast<String, String>(),
+      ...?section<Map<String, dynamic>>(key)?.cast<String, String>(),
     };
     return OptionalLedger(
       optional: names('optional'),
@@ -168,21 +216,29 @@ class OptionalLedger {
   /// Field to why its zero value is right for rows written before it existed.
   final Map<String, String> zeroValueOk;
 
-  /// This ledger with what cannot lose data recorded: new optional fields, and new
-  /// messages with their required fields. A required field on a known message stays
-  /// out, so that it keeps failing until someone handles it.
-  ///
-  /// A ledger with no messages has recorded nothing to compare with, so everything
-  /// is recorded, once.
+  /// This ledger with everything in [fields] accepted as it is.
+  OptionalLedger initializedFrom(ProtoFields fields) {
+    return OptionalLedger(
+      optional: <String>{...optional, ...fields.optional},
+      compat: compat,
+      messages: <String>{...messages, ...fields.messages},
+      required: <String>{...required, ...fields.required},
+      zeroValueOk: zeroValueOk,
+    );
+  }
+
+  /// This ledger with what cannot lose data recorded: new optional fields, new
+  /// messages with their required fields, and removed required fields. A required
+  /// field on a known message stays out, so that it keeps failing until someone
+  /// handles it.
   OptionalLedger updatedFrom(ProtoFields fields) {
-    final bool first = messages.isEmpty;
     return OptionalLedger(
       optional: <String>{...optional, ...fields.optional},
       compat: compat,
       messages: <String>{...messages, ...fields.messages},
       required: <String>{
-        ...required,
-        ...fields.required.where((String it) => first || !messages.contains(it.split('.').first)),
+        ...required.intersection(fields.required),
+        ...fields.required.where((String it) => !messages.contains(it.split('.').first)),
       },
       zeroValueOk: zeroValueOk,
     );
@@ -230,43 +286,56 @@ List<String> checkOptionalFields({
     );
   }
 
+  final List<String> goneMessages = ledger.messages.difference(fields.messages).toList()..sort();
+  for (final String message in goneMessages) {
+    problems.add(
+      'Message $message is gone. If it was renamed, its rows are still there and decode through the new name, so '
+      'its new fields need handling. Either way, delete it from "messages" in the ledger by hand.',
+    );
+  }
+
+  final List<String> gone = ledger.required.difference(fields.required).toList()..sort();
+  if (gone.isNotEmpty) {
+    problems.add(
+      '${gone.length} required fields in the ledger are gone (${gone.take(5).join(', ')}), and adding one back must '
+      'count as new. Run: $_update',
+    );
+  }
+
   final List<String> required = fields.required.toList()..sort();
   for (final String field in required) {
     final bool wasOptional = ledger.optional.contains(field);
-    if (!wasOptional && ledger.required.contains(field)) {
+    if (ledger.compat.containsKey(field) ||
+        (!wasOptional && (ledger.required.contains(field) || newMessages.contains(field.split('.').first)))) {
       continue;
     }
-    if (!wasOptional && newMessages.contains(field.split('.').first)) {
-      continue;
-    }
-    final String? decoder = ledger.compat[field];
-    if (decoder != null) {
-      if (!_isDecoderOf(decoder, field.split('.').first, converters)) {
-        problems.add(
-          '$field names $decoder as its decoder, but no ProtoEntityConverter in entity_converters.dart uses it '
-          'for ${field.split('.').first}: on its own converter, or on a parent\'s whose decoder names it.',
-        );
-      }
-    } else if (wasOptional) {
+    if (wasOptional) {
       problems.add(
         '$field lost `optional`, so rows that never wrote it decode as its zero value. Keep it optional, '
         'or add a decoder to entity_converters.dart and name it under "compat" in the ledger '
         '(see _decodeInvoiceCompat and "The proto is a storage format" in CLAUDE.md).',
       );
-    } else if (!ledger.zeroValueOk.containsKey(field)) {
+    } else if ((ledger.zeroValueOk[field] ?? '').trim().isEmpty) {
       problems.add(
         '$field is a new required field on a message that already has rows, which decode it as its zero '
         '(0, "", false, 1970, the first enum value). Make it optional, or name a decoder under "compat", or '
         'if the zero value is right, say why under "zero_value_ok" in the ledger. A renamed field counts: old '
-        'rows hold the old number.',
+        'rows hold the old number. If the message has never shipped, add the field to "required" instead.',
       );
     }
   }
 
-  final List<String> staleCompat = ledger.compat.keys.where((String it) => !fields.required.contains(it)).toList()
-    ..sort();
-  for (final String field in staleCompat) {
-    problems.add('$field is under "compat" in the ledger but is not a required field. Remove the entry.');
+  final List<String> decoders = ledger.compat.keys.toList()..sort();
+  for (final String field in decoders) {
+    final String message = field.split('.').first;
+    if (!fields.required.contains(field)) {
+      problems.add('$field is under "compat" in the ledger but is not a required field. Remove the entry.');
+    } else if (!_isDecoderOf(ledger.compat[field]!, message, converters)) {
+      problems.add(
+        '$field names ${ledger.compat[field]} as its decoder, but no ProtoEntityConverter in entity_converters.dart '
+        "uses it for $message: on its own converter, or on a parent's whose decoder names it.",
+      );
+    }
   }
   final List<String> staleZero = ledger.zeroValueOk.keys.where((String it) => !fields.required.contains(it)).toList()
     ..sort();

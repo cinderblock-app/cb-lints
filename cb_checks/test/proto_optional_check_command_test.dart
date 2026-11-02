@@ -36,7 +36,7 @@ const ProtoEntityConverter<Invoice> invoice\$ = ProtoEntityConverter<Invoice>(
 
 const Set<String> _messages = <String>{'Invoice', 'Note'};
 const Set<String> _optional = <String>{'Invoice.paid_at', 'Note.body'};
-const Set<String> _required = <String>{'Invoice.id', 'Invoice.due_date', 'Invoice.text'};
+const Set<String> _required = <String>{'Invoice.id', 'Invoice.due_date'};
 
 List<String> _check({
   Set<String> messages = _messages,
@@ -68,10 +68,25 @@ void main() {
       expect(fields.optional, _optional);
       expect(fields.required, _required);
     });
+
+    test('counts a oneof arm as neither, and resumes after the oneof', () {
+      final ProtoFields fields = parseProtoFields('''
+message Op {
+  string id = 1;
+  oneof value {
+    string text = 2;
+    Other other = 3;
+  }
+  string after = 4;
+}
+''');
+
+      expect(fields.required, <String>{'Op.id', 'Op.after'});
+    });
   });
 
   group('a field that lost optional', () {
-    const Set<String> required = <String>{'Invoice.id', 'Invoice.text'};
+    const Set<String> required = <String>{'Invoice.id'};
     const Set<String> optional = <String>{..._optional, 'Invoice.due_date'};
 
     test('fails', () {
@@ -180,7 +195,7 @@ const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operati
   });
 
   group('a new required field on a known message', () {
-    const Set<String> required = <String>{'Invoice.id', 'Invoice.text'};
+    const Set<String> required = <String>{'Invoice.id'};
 
     test('fails', () {
       final List<String> problems = _check(required: required);
@@ -244,25 +259,39 @@ const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operati
       );
     });
 
-    test('ignores a recorded field that was removed', () {
+    test('ignores a removed optional field, which is flagged if it comes back required', () {
       expect(_check(optional: const <String>{..._optional, 'Invoice.gone'}), isEmpty);
-      expect(_check(required: const <String>{..._required, 'Invoice.gone'}), isEmpty);
+    });
+
+    test('asks for an update on a removed required field', () {
+      final List<String> problems = _check(required: const <String>{..._required, 'Invoice.gone'});
+
+      expect(problems.single, contains('Invoice.gone'));
+      expect(problems.single, contains('--update'));
+    });
+
+    test('fails on a message that is gone', () {
+      expect(_check(messages: const <String>{..._messages, 'Vendor'}).single, startsWith('Message Vendor is gone'));
+    });
+
+    test('fails on a recorded field whose decoder is not used', () {
+      final List<String> problems = _check(compat: const <String, String>{'Invoice.id': '_decodeDeleted'});
+
+      expect(problems.single, contains('_decodeDeleted'));
+    });
+
+    test('does not take an empty reason', () {
+      final List<String> problems = _check(
+        required: const <String>{'Invoice.id'},
+        zeroValueOk: const <String, String>{'Invoice.due_date': ' '},
+      );
+
+      expect(problems.single, startsWith('Invoice.due_date is a new required field'));
     });
   });
 
   group('updatedFrom', () {
     final ProtoFields fields = parseProtoFields(_proto);
-
-    test('records everything on a ledger that has no messages yet', () {
-      final OptionalLedger ledger = const OptionalLedger(
-        optional: <String>{},
-        compat: <String, String>{},
-      ).updatedFrom(fields);
-
-      expect(ledger.messages, _messages);
-      expect(ledger.required, _required);
-      expect(checkOptionalFields(fields: fields, ledger: ledger, converters: _converters), isEmpty);
-    });
 
     test('records a new message with its fields', () {
       final OptionalLedger ledger = const OptionalLedger(
@@ -276,11 +305,33 @@ const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operati
       expect(ledger.optional, _optional);
     });
 
+    test('drops a removed required field, so that adding it back counts as new', () {
+      final OptionalLedger ledger = const OptionalLedger(
+        messages: _messages,
+        optional: _optional,
+        required: <String>{..._required, 'Invoice.gone'},
+        compat: <String, String>{},
+      ).updatedFrom(fields);
+
+      expect(ledger.required, _required);
+    });
+
+    test('initializedFrom accepts everything', () {
+      final OptionalLedger ledger = const OptionalLedger(
+        optional: <String>{},
+        compat: <String, String>{},
+      ).initializedFrom(fields);
+
+      expect(ledger.messages, _messages);
+      expect(ledger.required, _required);
+      expect(checkOptionalFields(fields: fields, ledger: ledger, converters: _converters), isEmpty);
+    });
+
     test('cannot hide a new required field on a known message', () {
       final OptionalLedger ledger = const OptionalLedger(
         messages: _messages,
         optional: _optional,
-        required: <String>{'Invoice.id', 'Invoice.text'},
+        required: <String>{'Invoice.id'},
         compat: <String, String>{},
       ).updatedFrom(fields);
 
@@ -295,7 +346,7 @@ const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operati
       final OptionalLedger ledger = const OptionalLedger(
         messages: _messages,
         optional: <String>{..._optional, 'Invoice.due_date'},
-        required: <String>{'Invoice.id', 'Invoice.text'},
+        required: <String>{'Invoice.id'},
         compat: <String, String>{},
       ).updatedFrom(fields);
 
@@ -327,13 +378,15 @@ const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operati
       expect(parsed.zeroValueOk, ledger.zeroValueOk);
     });
 
-    test('reads a ledger from before messages and required were recorded', () {
-      final OptionalLedger ledger = OptionalLedger.parse('{"compat": {}, "optional": ["A.a"]}');
+    test('refuses a ledger missing a section, as an empty one would pass for it', () {
+      expect(() => OptionalLedger.parse('{"compat": {}, "optional": ["A.a"]}'), throwsFormatException);
+    });
+
+    test('reads a partial ledger when asked, for --init', () {
+      final OptionalLedger ledger = OptionalLedger.parse('{"compat": {}, "optional": ["A.a"]}', partial: true);
 
       expect(ledger.optional, <String>{'A.a'});
       expect(ledger.messages, isEmpty);
-      expect(ledger.required, isEmpty);
-      expect(ledger.zeroValueOk, isEmpty);
     });
   });
 }
