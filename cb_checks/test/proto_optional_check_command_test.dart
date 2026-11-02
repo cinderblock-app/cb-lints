@@ -1,5 +1,5 @@
-import 'package:test/test.dart';
 import 'package:cb_checks/src/proto_optional_check_command.dart';
+import 'package:test/test.dart';
 
 const String _proto = '''
 syntax = "proto3";
@@ -34,48 +34,67 @@ const ProtoEntityConverter<Invoice> invoice\$ = ProtoEntityConverter<Invoice>(
 );
 ''';
 
-List<String> _check(Set<String> optional, {Map<String, String> compat = const <String, String>{}}) {
+const Set<String> _messages = <String>{'Invoice', 'Note'};
+const Set<String> _optional = <String>{'Invoice.paid_at', 'Note.body'};
+const Set<String> _required = <String>{'Invoice.id', 'Invoice.due_date', 'Invoice.text'};
+
+List<String> _check({
+  Set<String> messages = _messages,
+  Set<String> optional = _optional,
+  Set<String> required = _required,
+  Map<String, String> compat = const <String, String>{},
+  Map<String, String> zeroValueOk = const <String, String>{},
+  String converters = _converters,
+}) {
   return checkOptionalFields(
     fields: parseProtoFields(_proto),
-    ledger: OptionalLedger(optional: optional, compat: compat),
-    converters: _converters,
+    ledger: OptionalLedger(
+      messages: messages,
+      optional: optional,
+      required: required,
+      compat: compat,
+      zeroValueOk: zeroValueOk,
+    ),
+    converters: converters,
   );
 }
 
 void main() {
-  const Set<String> current = <String>{'Invoice.paid_at', 'Note.body'};
-
   group('parseProtoFields', () {
     test('splits singular fields by presence, per message', () {
       final ProtoFields fields = parseProtoFields(_proto);
 
-      expect(fields.optional, current);
-      expect(fields.required, <String>{'Invoice.id', 'Invoice.due_date', 'Invoice.text'});
+      expect(fields.messages, _messages);
+      expect(fields.optional, _optional);
+      expect(fields.required, _required);
     });
   });
 
-  group('checkOptionalFields', () {
-    test('passes when the ledger matches', () {
-      expect(_check(current), isEmpty);
+  group('a field that lost optional', () {
+    const Set<String> required = <String>{'Invoice.id', 'Invoice.text'};
+    const Set<String> optional = <String>{..._optional, 'Invoice.due_date'};
+
+    test('fails', () {
+      final List<String> problems = _check(optional: optional, required: required);
+
+      expect(problems.single, startsWith('Invoice.due_date lost `optional`'));
     });
 
-    test('fails on an optional field missing from the ledger', () {
-      final List<String> problems = _check(<String>{'Invoice.paid_at'});
-
-      expect(problems.single, contains('Note.body'));
-      expect(problems.single, contains('--update'));
-    });
-
-    test('fails when a recorded field lost optional', () {
-      final List<String> problems = _check(<String>{...current, 'Invoice.due_date'});
+    test('fails even if a reason says the zero value is fine, as it needs a decoder', () {
+      final List<String> problems = _check(
+        optional: optional,
+        required: required,
+        zeroValueOk: const <String, String>{'Invoice.due_date': 'it is fine'},
+      );
 
       expect(problems.single, startsWith('Invoice.due_date lost `optional`'));
     });
 
     test('passes when a converter uses the named decoder', () {
       final List<String> problems = _check(
-        <String>{...current, 'Invoice.due_date'},
-        compat: <String, String>{'Invoice.due_date': '_decodeInvoiceCompat'},
+        optional: optional,
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeInvoiceCompat'},
       );
 
       expect(problems, isEmpty);
@@ -83,20 +102,19 @@ void main() {
 
     test('fails when no converter uses the named decoder', () {
       final List<String> problems = _check(
-        <String>{...current, 'Invoice.due_date'},
-        compat: <String, String>{'Invoice.due_date': '_decodeElsewhere'},
+        optional: optional,
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeElsewhere'},
       );
 
       expect(problems.single, contains('_decodeElsewhere'));
     });
 
     test('fails when the decoder belongs to another message', () {
-      final List<String> problems = checkOptionalFields(
-        fields: parseProtoFields(_proto),
-        ledger: const OptionalLedger(
-          optional: <String>{...current, 'Invoice.id'},
-          compat: <String, String>{'Invoice.id': '_decodeNote'},
-        ),
+      final List<String> problems = _check(
+        optional: optional,
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeNote'},
         converters: 'const ProtoEntityConverter<Note> note = ProtoEntityConverter<Note>(_decodeNote, encodeNote);',
       );
 
@@ -104,54 +122,172 @@ void main() {
     });
 
     test('does not count a commented-out converter', () {
-      final List<String> problems = checkOptionalFields(
-        fields: parseProtoFields(_proto),
-        ledger: const OptionalLedger(
-          optional: <String>{...current, 'Invoice.id'},
-          compat: <String, String>{'Invoice.id': '_decodeInvoice'},
-        ),
+      final List<String> problems = _check(
+        optional: optional,
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeInvoice'},
         converters: '// ProtoEntityConverter<Invoice>(_decodeInvoice, encodeInvoice)',
       );
 
       expect(problems.single, contains('_decodeInvoice'));
     });
+  });
 
-    test('fails on a decoder entry for a field that is still optional', () {
-      final List<String> problems = _check(current, compat: <String, String>{'Note.body': '_decodeInvoiceCompat'});
+  group('a new required field on a known message', () {
+    const Set<String> required = <String>{'Invoice.id', 'Invoice.text'};
 
-      expect(problems.single, startsWith('Note.body is under "compat"'));
+    test('fails', () {
+      final List<String> problems = _check(required: required);
+
+      expect(problems.single, startsWith('Invoice.due_date is a new required field'));
+    });
+
+    test('fails when it is a rename of an optional field', () {
+      final List<String> problems = _check(
+        optional: const <String>{..._optional, 'Invoice.due_on'},
+        required: required,
+      );
+
+      expect(problems.single, startsWith('Invoice.due_date is a new required field'));
+    });
+
+    test('passes with a reason', () {
+      expect(_check(required: required, zeroValueOk: const <String, String>{'Invoice.due_date': 'why'}), isEmpty);
+    });
+
+    test('passes with a decoder', () {
+      final List<String> problems = _check(
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeInvoiceCompat'},
+      );
+
+      expect(problems, isEmpty);
+    });
+  });
+
+  group('the rest of the ledger', () {
+    test('passes when it matches', () {
+      expect(_check(), isEmpty);
+    });
+
+    test('fails on an optional field it does not hold', () {
+      final List<String> problems = _check(optional: const <String>{'Invoice.paid_at'});
+
+      expect(problems.single, contains('Note.body'));
+      expect(problems.single, contains('--update'));
+    });
+
+    test('asks for an update on a new message, without calling its fields unhandled', () {
+      final List<String> problems = _check(
+        messages: const <String>{'Note'},
+        required: const <String>{},
+        optional: const <String>{'Note.body', 'Invoice.paid_at'},
+      );
+
+      expect(problems.single, contains('1 messages are not in the ledger (Invoice)'));
+    });
+
+    test('fails on an entry for a field that is not required', () {
+      expect(
+        _check(compat: const <String, String>{'Note.body': '_decodeInvoiceCompat'}).single,
+        startsWith('Note.body is under "compat"'),
+      );
+      expect(
+        _check(zeroValueOk: const <String, String>{'Note.body': 'why'}).single,
+        startsWith('Note.body is under "zero_value_ok"'),
+      );
     });
 
     test('ignores a recorded field that was removed', () {
-      expect(_check(<String>{...current, 'Invoice.gone'}), isEmpty);
+      expect(_check(optional: const <String>{..._optional, 'Invoice.gone'}), isEmpty);
+      expect(_check(required: const <String>{..._required, 'Invoice.gone'}), isEmpty);
+    });
+  });
+
+  group('updatedFrom', () {
+    final ProtoFields fields = parseProtoFields(_proto);
+
+    test('records everything on a ledger that has no messages yet', () {
+      final OptionalLedger ledger = const OptionalLedger(
+        optional: <String>{},
+        compat: <String, String>{},
+      ).updatedFrom(fields);
+
+      expect(ledger.messages, _messages);
+      expect(ledger.required, _required);
+      expect(checkOptionalFields(fields: fields, ledger: ledger, converters: _converters), isEmpty);
+    });
+
+    test('records a new message with its fields', () {
+      final OptionalLedger ledger = const OptionalLedger(
+        messages: <String>{'Note'},
+        optional: <String>{'Note.body'},
+        compat: <String, String>{},
+      ).updatedFrom(fields);
+
+      expect(ledger.messages, _messages);
+      expect(ledger.required, _required);
+      expect(ledger.optional, _optional);
+    });
+
+    test('cannot hide a new required field on a known message', () {
+      final OptionalLedger ledger = const OptionalLedger(
+        messages: _messages,
+        optional: _optional,
+        required: <String>{'Invoice.id', 'Invoice.text'},
+        compat: <String, String>{},
+      ).updatedFrom(fields);
+
+      expect(ledger.required, isNot(contains('Invoice.due_date')));
+      expect(
+        checkOptionalFields(fields: fields, ledger: ledger, converters: _converters).single,
+        startsWith('Invoice.due_date is a new required field'),
+      );
+    });
+
+    test('cannot hide a field that lost optional', () {
+      final OptionalLedger ledger = const OptionalLedger(
+        messages: _messages,
+        optional: <String>{..._optional, 'Invoice.due_date'},
+        required: <String>{'Invoice.id', 'Invoice.text'},
+        compat: <String, String>{},
+      ).updatedFrom(fields);
+
+      expect(
+        checkOptionalFields(fields: fields, ledger: ledger, converters: _converters).single,
+        startsWith('Invoice.due_date lost `optional`'),
+      );
     });
   });
 
   group('OptionalLedger', () {
-    test('updating cannot hide a dropped field', () {
-      final OptionalLedger ledger = const OptionalLedger(
-        optional: <String>{'Invoice.due_date'},
-        compat: <String, String>{},
-      ).including(parseProtoFields(_proto).optional);
-
-      expect(ledger.optional, <String>{...current, 'Invoice.due_date'});
-      expect(
-        checkOptionalFields(fields: parseProtoFields(_proto), ledger: ledger, converters: _converters).single,
-        startsWith('Invoice.due_date lost'),
-      );
-    });
-
     test('round-trips, sorted', () {
       const OptionalLedger ledger = OptionalLedger(
+        messages: <String>{'B', 'A'},
         optional: <String>{'B.b', 'A.a'},
+        required: <String>{'B.c', 'A.c'},
         compat: <String, String>{'A.a': '_decode'},
+        zeroValueOk: <String, String>{'B.c': 'why'},
       );
 
       final String encoded = ledger.encode();
+      final OptionalLedger parsed = OptionalLedger.parse(encoded);
 
-      expect(encoded.indexOf('A.a'), lessThan(encoded.indexOf('B.b')));
-      expect(OptionalLedger.parse(encoded).optional, ledger.optional);
-      expect(OptionalLedger.parse(encoded).compat, ledger.compat);
+      expect(encoded.indexOf('A.a"\n'), lessThan(encoded.indexOf('B.b"')));
+      expect(parsed.messages, ledger.messages);
+      expect(parsed.optional, ledger.optional);
+      expect(parsed.required, ledger.required);
+      expect(parsed.compat, ledger.compat);
+      expect(parsed.zeroValueOk, ledger.zeroValueOk);
+    });
+
+    test('reads a ledger from before messages and required were recorded', () {
+      final OptionalLedger ledger = OptionalLedger.parse('{"compat": {}, "optional": ["A.a"]}');
+
+      expect(ledger.optional, <String>{'A.a'});
+      expect(ledger.messages, isEmpty);
+      expect(ledger.required, isEmpty);
+      expect(ledger.zeroValueOk, isEmpty);
     });
   });
 }
