@@ -243,8 +243,8 @@ List<String> checkOptionalFields({
     if (decoder != null) {
       if (!_isDecoderOf(decoder, field.split('.').first, converters)) {
         problems.add(
-          '$field names $decoder as its decoder, but no ProtoEntityConverter<${field.split('.').first}> '
-          'in entity_converters.dart uses it.',
+          '$field names $decoder as its decoder, but no ProtoEntityConverter in entity_converters.dart uses it '
+          'for ${field.split('.').first}: on its own converter, or on a parent\'s whose decoder names it.',
         );
       }
     } else if (wasOptional) {
@@ -277,7 +277,18 @@ List<String> checkOptionalFields({
   return problems;
 }
 
+/// Whether a converter uses [decoder], and it is for [message]: on that message's
+/// own converter, or on a parent's, as a message stored inside another is decoded
+/// by the parent's, whose body then has to name it.
 bool _isDecoderOf(String decoder, String message, String converters) {
   final String code = converters.replaceAll(RegExp(r'//.*'), '');
-  return RegExp('ProtoEntityConverter<${RegExp.escape(message)}>\\(\\s*${RegExp.escape(decoder)}\\s*,').hasMatch(code);
+  final String name = RegExp.escape(decoder);
+  if (RegExp('ProtoEntityConverter<${RegExp.escape(message)}>\\(\\s*$name\\s*,').hasMatch(code)) {
+    return true;
+  }
+  if (!RegExp('ProtoEntityConverter<\\w+>\\(\\s*$name\\s*,').hasMatch(code)) {
+    return false;
+  }
+  final RegExpMatch? body = RegExp('\\b$name\\([^)]*\\)\\s*(\\{.*?\\n\\}|=>.*?;)', dotAll: true).firstMatch(code);
+  return body != null && RegExp('\\b${RegExp.escape(message)}\\b').hasMatch(body.group(1)!);
 }

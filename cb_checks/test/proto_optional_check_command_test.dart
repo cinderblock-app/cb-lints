@@ -118,7 +118,53 @@ void main() {
         converters: 'const ProtoEntityConverter<Note> note = ProtoEntityConverter<Note>(_decodeNote, encodeNote);',
       );
 
-      expect(problems.single, contains('ProtoEntityConverter<Invoice>'));
+      expect(problems.single, contains('for Invoice'));
+    });
+
+    test('passes on a parent\'s converter whose decoder names the message', () {
+      const String parent = '''
+Operation _decodeOperationCompat(List<int> bytes) {
+  final Operation operation = decodeOperation(bytes);
+  return switch (operation.info) {
+    final Invoice info when info.dueDate == 0 => operation.copyWith(info: info),
+    _ => operation,
+  };
+}
+
+const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operation>(
+  _decodeOperationCompat,
+  encodeOperation,
+);
+''';
+      final List<String> problems = _check(
+        optional: optional,
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeOperationCompat'},
+        converters: parent,
+      );
+
+      expect(problems, isEmpty);
+    });
+
+    test('fails on a parent\'s converter whose decoder does not name the message', () {
+      const String parent = '''
+Operation _decodeOperationCompat(List<int> bytes) {
+  return decodeOperation(bytes);
+}
+
+const ProtoEntityConverter<Operation> operation\$ = ProtoEntityConverter<Operation>(
+  _decodeOperationCompat,
+  encodeOperation,
+);
+''';
+      final List<String> problems = _check(
+        optional: optional,
+        required: required,
+        compat: const <String, String>{'Invoice.due_date': '_decodeOperationCompat'},
+        converters: parent,
+      );
+
+      expect(problems.single, contains('for Invoice'));
     });
 
     test('does not count a commented-out converter', () {
