@@ -26,7 +26,8 @@ which move together and follow the Dart SDK, so a Flutter bump in `cb-mobile` ca
   stream to guard.
 - `docs-check --fix` points a reference at its file when git recorded that file moving. A file with the
   same name is not enough.
-- `proto-optional-check --update` records new optional fields.
+- `proto-optional-check --update` records what cannot lose data: new optional fields, new messages, and
+  removed required fields. It cannot approve a new required field or a dropped `optional`.
 
 The rest need a person: naming a capability, routing a write through an Operation, moving a page and its
 imports, writing a decoder, or finding what a renamed file or name is called now.
