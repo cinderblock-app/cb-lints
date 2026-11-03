@@ -5,6 +5,7 @@ import 'package:cb_lints/src/api_class_in_presentation.dart';
 import 'package:cb_lints/src/connectivity_event_outside_app_epics.dart';
 import 'package:cb_lints/src/memo_input_is_collection_field.dart';
 import 'package:cb_lints/src/platform_check_outside_platform_support.dart';
+import 'package:cb_lints/src/reader_call_after_ignore_no_connection.dart';
 import 'package:cb_lints/src/reader_without_ignore_no_connection.dart';
 import 'package:cb_lints/src/route_page_outside_pages.dart';
 
@@ -24,6 +25,7 @@ class CbLintsPlugin extends Plugin {
     registry.registerWarningRule(ConnectivityEventOutsideAppEpics());
     registry.registerWarningRule(MemoInputIsCollectionField());
     registry.registerWarningRule(PlatformCheckOutsidePlatformSupport());
+    registry.registerWarningRule(ReaderCallAfterIgnoreNoConnection());
     registry.registerWarningRule(ReaderWithoutIgnoreNoConnection());
     registry.registerFixForRule(ReaderWithoutIgnoreNoConnection.code, AddIgnoreNoConnection.new);
     registry.registerWarningRule(RoutePageOutsidePages());

@@ -4,6 +4,7 @@ import 'package:analyzer/analysis_rule/rule_visitor_registry.dart';
 import 'package:analyzer/dart/ast/ast.dart';
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/error/error.dart';
+import 'package:cb_lints/src/package_paths.dart';
 
 /// Reports a `yield*` in a `SyncEngine` reader whose stream does not go through
 /// `ignoreNoConnection()`.
@@ -34,23 +35,27 @@ class ReaderWithoutIgnoreNoConnection extends AnalysisRule {
 
   @override
   void registerNodeProcessors(RuleVisitorRegistry registry, RuleContext context) {
-    if (_isSyncEngine(context)) {
+    if (isSyncEngineLibrary(context)) {
       registry.addYieldStatement(this, _Visitor(this));
     }
   }
+}
 
-  /// Whether the library being analyzed is under the sync engine. The library's
-  /// defining file decides, as the readers are parts of `index.dart`.
-  static bool _isSyncEngine(RuleContext context) {
-    final package = context.package;
-    if (package == null) {
-      return false;
-    }
-    final file = context.definingUnit.file;
-    final pathContext = file.provider.pathContext;
-    final segments = pathContext.split(pathContext.relative(file.path, from: package.root.path));
-    return segments.join('/').startsWith('lib/src/data/sync_engine/');
-  }
+/// Whether the library being analyzed is under the sync engine. The library's
+/// defining file decides, as the readers are parts of `index.dart`.
+bool isSyncEngineLibrary(RuleContext context) {
+  return libraryPath(context)?.startsWith('lib/src/data/sync_engine/') ?? false;
+}
+
+/// Whether [node] is a `yield*` in an `async*` body of a class named `*Reader`.
+///
+/// A `sync*` helper yields an Iterable, which has no stream to guard.
+bool isReaderStreamYield(YieldStatement node) {
+  final String? name = node.thisOrAncestorOfType<ClassDeclaration>()?.declaredFragment?.element.name;
+  return node.star != null &&
+      name != null &&
+      name.endsWith('Reader') &&
+      (node.thisOrAncestorOfType<FunctionBody>()?.isAsynchronous ?? false);
 }
 
 class _Visitor extends SimpleAstVisitor<void> {
@@ -60,19 +65,10 @@ class _Visitor extends SimpleAstVisitor<void> {
 
   @override
   void visitYieldStatement(YieldStatement node) {
-    if (node.star == null || !_isInReader(node) || goesThroughIgnoreNoConnection(node.expression)) {
-      return;
-    }
-    // A `sync*` helper yields an Iterable, which the call does not exist on.
-    if (!(node.thisOrAncestorOfType<FunctionBody>()?.isAsynchronous ?? false)) {
+    if (!isReaderStreamYield(node) || goesThroughIgnoreNoConnection(node.expression)) {
       return;
     }
     rule.reportAtToken(node.yieldKeyword);
-  }
-
-  bool _isInReader(AstNode node) {
-    final String? name = node.thisOrAncestorOfType<ClassDeclaration>()?.declaredFragment?.element.name;
-    return name != null && name.endsWith('Reader');
   }
 }
 
