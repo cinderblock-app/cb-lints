@@ -8,3 +8,5 @@ environment:
 dependencies:
   auto_route:
     path: auto_route
+  freezed_annotation:
+    path: freezed_annotation
