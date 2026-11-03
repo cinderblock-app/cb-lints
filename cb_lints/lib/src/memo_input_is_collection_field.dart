@@ -24,7 +24,11 @@ import 'package:cb_lints/src/package_paths.dart';
 /// of its fields change.
 ///
 /// "Input" means an element of the list literal given as the call's first
-/// argument; what the compute function reads is not checked. A field counts
+/// argument, or held in a final local that argument names; what the compute
+/// function reads is not checked. An input reaches such a field through a final
+/// local initialized with it, a conditional, a `!`, a cast, or `.keys`,
+/// `.values`, `.entries`, `.toList()` or `.toSet()` on it, each of which is new
+/// on every read too, and is reported where it sits in the list. A field counts
 /// when the receiver's class carries `@Freezed` (or a constant of it) and the
 /// class freezed generated for it declares that field as a getter rather than
 /// storing it, which is exactly the wrapping case. A field stored as is (a
@@ -34,7 +38,7 @@ import 'package:cb_lints/src/package_paths.dart';
 class MemoInputIsCollectionField extends AnalysisRule {
   static const LintCode code = LintCode(
     'memo_input_is_collection_field',
-    "The Memo input '{0}' is wrapped anew on every read, so the memo never hits.",
+    "The Memo input reads '{0}', which freezed wraps anew on every read, so the memo never hits.",
     correctionMessage: "Try passing the object that holds it, '{1}', instead.",
     severity: DiagnosticSeverity.WARNING,
   );
@@ -81,7 +85,8 @@ class _Visitor extends SimpleAstVisitor<void> {
       return;
     }
     final arguments = memoArguments(node);
-    final Expression? inputs = arguments.isEmpty ? null : arguments.first.argumentExpression.unParenthesized;
+    final Expression? argument = arguments.isEmpty ? null : arguments.first.argumentExpression.unParenthesized;
+    final Expression? inputs = argument is SimpleIdentifier ? _finalLocalInitializer(argument) : argument;
     if (inputs is ListLiteral) {
       inputs.elements.forEach(_checkElement);
     }
@@ -103,31 +108,73 @@ class _Visitor extends SimpleAstVisitor<void> {
   }
 
   void _checkInput(Expression input) {
-    final Expression expression = input.unParenthesized;
-    final Expression receiver;
-    final SimpleIdentifier property;
-    switch (expression) {
-      case PrefixedIdentifier():
-        receiver = expression.prefix;
-        property = expression.identifier;
-      case PropertyAccess(:final Expression target?):
-        receiver = target;
-        property = expression.propertyName;
-      default:
-        return;
+    final (Expression, Expression)? read = _wrappedRead(input, <Element>{});
+    if (read != null) {
+      final (Expression field, Expression receiver) = read;
+      rule.reportAtNode(input.unParenthesized, arguments: <Object>[field.toSource(), receiver.toSource()]);
     }
+  }
+
+  /// The wrapped field read [input] stands for, and its receiver, or `null`.
+  (Expression, Expression)? _wrappedRead(Expression input, Set<Element> seen) {
+    final Expression expression = input.unParenthesized;
+    switch (expression) {
+      case PostfixExpression() when expression.operator.lexeme == '!':
+        return _wrappedRead(expression.operand, seen);
+      case AsExpression():
+        return _wrappedRead(expression.expression, seen);
+      case ConditionalExpression():
+        return _wrappedRead(expression.thenExpression, seen) ?? _wrappedRead(expression.elseExpression, seen);
+      case SimpleIdentifier():
+        final Element? element = expression.element;
+        final Expression? initializer = element != null && seen.add(element)
+            ? _finalLocalInitializer(expression)
+            : null;
+        return initializer == null ? null : _wrappedRead(initializer, seen);
+      case PrefixedIdentifier():
+        return _fieldRead(expression, expression.prefix, expression.identifier, seen);
+      case PropertyAccess(:final Expression target?):
+        return _fieldRead(expression, target, expression.propertyName, seen);
+      case MethodInvocation(:final Expression target?)
+          when _copies.contains(expression.methodName.name) && expression.argumentList.arguments.isEmpty:
+        return _wrappedRead(target, seen);
+      default:
+        return null;
+    }
+  }
+
+  /// Members that build a new object from a collection on every read.
+  static const Set<String> _views = <String>{'keys', 'values', 'entries'};
+  static const Set<String> _copies = <String>{'toList', 'toSet'};
+
+  (Expression, Expression)? _fieldRead(
+    Expression expression,
+    Expression receiver,
+    SimpleIdentifier property,
+    Set<Element> seen,
+  ) {
     if (property.element is! GetterElement) {
-      return;
+      return null;
     }
     final DartType? receiverType = receiver.staticType;
-    if (receiverType is! InterfaceType) {
-      return;
+    if (receiverType is InterfaceType &&
+        freezedAnnotation(receiverType.element) != null &&
+        _wrapsOnRead(receiverType.element, property.name)) {
+      return (expression, receiver);
     }
-    final InterfaceElement owner = receiverType.element;
-    if (freezedAnnotation(owner) == null || !_wrapsOnRead(owner, property.name)) {
-      return;
+    return _views.contains(property.name) ? _wrappedRead(receiver, seen) : null;
+  }
+
+  /// The initializer of the final or const local [identifier] names, or `null`
+  /// when it names anything else, which could hold another value by the call.
+  Expression? _finalLocalInitializer(SimpleIdentifier identifier) {
+    final Element? element = identifier.element;
+    if (element is! LocalVariableElement || !(element.isFinal || element.isConst)) {
+      return null;
     }
-    rule.reportAtNode(expression, arguments: <Object>[expression.toSource(), receiver.toSource()]);
+    final _DeclarationFinder finder = _DeclarationFinder(element);
+    identifier.root.accept(finder);
+    return finder.initializer;
   }
 
   /// Whether a class freezed generated for [owner] computes [name] in a
@@ -140,5 +187,22 @@ class _Visitor extends SimpleAstVisitor<void> {
       }
     }
     return false;
+  }
+}
+
+/// Finds the declaration of a local variable, for its initializer.
+class _DeclarationFinder extends RecursiveAstVisitor<void> {
+  _DeclarationFinder(this.element);
+
+  final LocalVariableElement element;
+  Expression? initializer;
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    if (node.declaredFragment?.element == element) {
+      initializer = node.initializer;
+      return;
+    }
+    super.visitVariableDeclaration(node);
   }
 }
