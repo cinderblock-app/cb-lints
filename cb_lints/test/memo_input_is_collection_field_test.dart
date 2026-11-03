@@ -26,7 +26,7 @@ String _converter(String inputs) {
   return '''
 ${_imports}final Memo<List<int>> memo = Memo<List<int>>();
 
-List<int> convert(AppState state) {
+List<int> convert(AppState state, {bool flag = false}) {
   return memo(<Object?>[$inputs], () => <int>[]);
 }
 ''';
@@ -179,6 +179,109 @@ List<int> convert(AppState state) {
       _converter('if (state.appointments.count > 0) state.appointments.allAppointments'),
       'state.appointments.allAppointments',
     );
+  }
+
+  /// A memo body over [statements] whose inputs are [inputs].
+  String _hoisted(String statements, String inputs) {
+    return '''
+${_imports}final Memo<List<int>> memo = Memo<List<int>>();
+
+List<int> convert(AppState state, AppState? maybe, bool flag) {
+$statements
+  return memo($inputs, () => <int>[]);
+}
+''';
+  }
+
+  Future<void> _assertLintedAt(String content, String reported) async {
+    await assertDiagnosticsInFile(_write(_path, content), [lint(content.lastIndexOf(reported), reported.length)]);
+  }
+
+  Future<void> test_finalLocal() async {
+    await _assertLintedAt(
+      _hoisted('  final Map<String, int> all = state.appointments.allAppointments;', '<Object?>[all]'),
+      'all',
+    );
+  }
+
+  Future<void> test_finalLocalOfFinalLocal() async {
+    await _assertLintedAt(
+      _hoisted(
+        '  final AppointmentsState appointments = state.appointments;\n'
+            '  final Map<String, int> all = appointments.allAppointments;',
+        '<Object?>[all]',
+      ),
+      'all',
+    );
+  }
+
+  Future<void> test_inputsInFinalLocal() async {
+    final String content = _hoisted(
+      '  final List<Object?> inputs = <Object?>[state.appointments.allAppointments];',
+      'inputs',
+    );
+    await _assertLintedAt(content, 'state.appointments.allAppointments');
+  }
+
+  Future<void> test_conditionalBranch() async {
+    await _assertLintedAt(
+      _converter('flag ? state.appointments : state.appointments.allAppointments'),
+      'flag ? state.appointments : state.appointments.allAppointments',
+    );
+  }
+
+  Future<void> test_nullCheck() async {
+    await _assertLintedAt(
+      _hoisted('', '<Object?>[(maybe?.appointments.allAppointments)!]'),
+      '(maybe?.appointments.allAppointments)!',
+    );
+  }
+
+  Future<void> test_valuesOfField() async {
+    await _assertLintedAt(
+      _converter('state.appointments.allAppointments.values'),
+      'state.appointments.allAppointments.values',
+    );
+  }
+
+  Future<void> test_copyOfField() async {
+    await _assertLintedAt(
+      _hoisted('  final Map<String, int> all = state.appointments.allAppointments;', '<Object?>[all.keys.toList()]'),
+      'all.keys.toList()',
+    );
+  }
+
+  /// A local that is not final could hold something else by the call.
+  Future<void> test_nonFinalLocal() async {
+    await assertNoDiagnosticsInFile(
+      _write(
+        _path,
+        _hoisted(
+          '  Object? all = state.appointments.allAppointments;\n'
+              '  all = state.appointments;',
+          '<Object?>[all]',
+        ),
+      ),
+    );
+  }
+
+  Future<void> test_finalLocalOfStateObject() async {
+    await assertNoDiagnosticsInFile(
+      _write(
+        _path,
+        _hoisted('  final AppointmentsState appointments = state.appointments;', '<Object?>[appointments]'),
+      ),
+    );
+  }
+
+  Future<void> test_conditionalOfStoredFields() async {
+    await assertNoDiagnosticsInFile(
+      _write(_path, _converter('flag ? state.appointments.kept : state.appointments.count')),
+    );
+  }
+
+  Future<void> test_valuesOfStoredField() async {
+    await assertNoDiagnosticsInFile(_write(_path, _converter('state.appointments.kept.toList()')));
   }
 
   Future<void> test_stateObject() async {
