@@ -12,8 +12,8 @@ done
 cd fixture
 dart pub get
 output=$(dart analyze --format=machine . 2>&1 || true)
-for rule in api_class_in_presentation platform_check_outside_platform_support reader_without_ignore_no_connection \
-  route_page_outside_pages; do
+for rule in api_class_in_presentation connectivity_event_outside_app_epics \
+  platform_check_outside_platform_support reader_without_ignore_no_connection route_page_outside_pages; do
   if ! grep -qi "|$rule|" <<<"$output"; then
     echo "fixture did not draw $rule. The analyzer said:" >&2
     echo "$output" >&2
