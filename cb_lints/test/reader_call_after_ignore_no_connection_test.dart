@@ -45,6 +45,7 @@ extension Operators on Stream<int> {
   Stream<int> asyncExpand(Stream<int> Function(int) convert) => this;
   Stream<int> map(int Function(int) convert) => this;
   Stream<int> where(bool Function(int) test) => this;
+  Stream<int> get refreshed => this;
 }
 ''');
     _write('lib/src/data/sync_engine/util/guards.dart', r'''
@@ -125,6 +126,38 @@ extension on Stream<int> {
     await _assertLinted(
       '    yield* flag ? api().ignoreNoConnection().asyncMap((int id) => fetch(id)) : api().ignoreNoConnection();',
       'asyncMap',
+    );
+  }
+
+  /// A getter runs code too.
+  Future<void> test_getterAfterGuard() async {
+    final String content = _reader('    yield* api().ignoreNoConnection().refreshed;');
+    await assertDiagnosticsInFile(_write(_syncEnginePath, content), [
+      lint(content.indexOf('refreshed;'), 'refreshed'.length),
+    ]);
+  }
+
+  Future<void> test_afterCastOfGuard() async {
+    await _assertLinted(
+      '    // ignore: unnecessary_cast\n    yield* (api().ignoreNoConnection() as Stream<int>).asyncMap((int id) => fetch(id));',
+      'asyncMap',
+    );
+  }
+
+  Future<void> test_guardThroughExtensionOverride() async {
+    await _assertLinted('    yield* Guards(api()).ignoreNoConnection().asyncMap((int id) => fetch(id));', 'asyncMap');
+  }
+
+  Future<void> test_operatorThroughExtensionOverride() async {
+    final String content = _reader('    yield* Operators(api().ignoreNoConnection()).asyncMap((int id) => fetch(id));');
+    await assertDiagnosticsInFile(_write(_syncEnginePath, content), [
+      lint(content.indexOf('asyncMap((int id) => fetch'), 'asyncMap'.length),
+    ]);
+  }
+
+  Future<void> test_getterBeforeGuard() async {
+    await assertNoDiagnosticsInFile(
+      _write(_syncEnginePath, _reader('    yield* api().refreshed.ignoreNoConnection();')),
     );
   }
 
