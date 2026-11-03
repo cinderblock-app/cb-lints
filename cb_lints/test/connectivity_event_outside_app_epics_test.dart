@@ -164,4 +164,68 @@ const Object event = OnConnectivityEvent(isConnected: true);
 '''),
     );
   }
+
+  Future<void> test_subclass() async {
+    await _assertLinted('''
+class FakeOnline extends OnConnectivityEvent {
+  const FakeOnline() : super(isConnected: true);
+}
+''', 'OnConnectivityEvent');
+  }
+
+  Future<void> test_implementation() async {
+    await _assertLinted('''
+class FakeOnline implements OnConnectivityEvent {
+  @override
+  bool get isConnected => true;
+}
+''', 'OnConnectivityEvent');
+  }
+
+  /// A subclass of a subclass, declared elsewhere under `lib/`.
+  Future<void> test_indirectSubclass() async {
+    _write('lib/src/util/fake_online.dart', '''
+${_import}class FakeOnline extends OnConnectivityEvent {
+  const FakeOnline() : super(isConnected: true);
+}
+''');
+    const String content = r'''
+import 'package:test/src/util/fake_online.dart';
+
+class FakerOnline extends FakeOnline {
+  const FakerOnline();
+}
+''';
+    await assertDiagnosticsInFile(_write(_otherPath, content), [
+      lint(content.indexOf('FakeOnline {'), 'FakeOnline'.length),
+    ]);
+  }
+
+  Future<void> test_classAlias() async {
+    await _assertLinted('''
+mixin Quiet {}
+
+class FakeOnline = OnConnectivityEvent with Quiet;
+''', 'OnConnectivityEvent');
+  }
+
+  Future<void> test_subclassInTest() async {
+    await assertNoDiagnosticsInFile(
+      _write('test/src/fakes.dart', '''
+${_import}class FakeOnline extends OnConnectivityEvent {
+  const FakeOnline() : super(isConnected: true);
+}
+'''),
+    );
+  }
+
+  Future<void> test_otherCaseSubclass() async {
+    await assertNoDiagnosticsInFile(
+      _write(_otherPath, '''
+${_import}class Starting extends ListenForConnectivityStart {
+  const Starting();
+}
+'''),
+    );
+  }
 }
