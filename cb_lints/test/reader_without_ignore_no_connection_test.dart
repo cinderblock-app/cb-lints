@@ -12,7 +12,7 @@ void main() {
 }
 
 const String _prelude = r'''
-extension on Stream<int> {
+extension Guards on Stream<int> {
   Stream<int> ignoreNoConnection() => this;
   Stream<int> notEquals(int value) => this;
   Stream<int> guarded(Stream<int> Function() body) => this;
@@ -89,6 +89,25 @@ class ReaderWithoutIgnoreNoConnectionTest extends AnalysisRuleTest {
 
   Future<void> test_conditionalOneUnguarded() async {
     await _assertLinted(_reader('    yield* flag ? api().ignoreNoConnection() : api();'));
+  }
+
+  Future<void> test_castAroundGuard() async {
+    await assertNoDiagnosticsInFile(
+      _write(
+        _syncEnginePath,
+        _reader(
+          '    // ignore: unnecessary_cast\n    yield* (api().ignoreNoConnection() as Stream<int>).notEquals(1);',
+        ),
+      ),
+    );
+  }
+
+  Future<void> test_guardThroughExtensionOverride() async {
+    await assertNoDiagnosticsInFile(_write(_syncEnginePath, _reader('    yield* Guards(api()).ignoreNoConnection();')));
+  }
+
+  Future<void> test_guardThroughExtensionOverrideAfterAwait() async {
+    await _assertLinted(_reader('    yield* Guards(await Future<Stream<int>>.value(api())).ignoreNoConnection();'));
   }
 
   Future<void> test_guardAfterAwait() async {

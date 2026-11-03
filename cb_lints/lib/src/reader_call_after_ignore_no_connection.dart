@@ -9,9 +9,10 @@ import 'package:analyzer/file_system/file_system.dart';
 import 'package:cb_lints/src/package_paths.dart';
 import 'package:cb_lints/src/reader_without_ignore_no_connection.dart';
 
-/// Reports an operator chained after `ignoreNoConnection()` in a `yield*` of a
-/// `SyncEngine` reader, unless it is one of the sync engine's own error
-/// handlers, `onNotFound` and `logBadResponses`.
+/// Reports an operator or getter chained after `ignoreNoConnection()` in a
+/// `yield*` of a `SyncEngine` reader, unless it is one of the sync engine's own
+/// error handlers, `onNotFound` and `logBadResponses`. The chain is followed
+/// through parentheses, casts and extension overrides.
 ///
 /// `ignoreNoConnection()` only sees the errors of the stream it is called on.
 /// An operator after it that reaches the network, as in
@@ -76,10 +77,11 @@ class _Visitor extends SimpleAstVisitor<void> {
   }
 
   /// Walks the chain from the outermost call in, and reports the unsafe
-  /// operator nearest to the last `ignoreNoConnection()`. A chain with no guard
-  /// is `reader_without_ignore_no_connection`'s to report.
+  /// operator nearest to the last `ignoreNoConnection()`. A getter is never
+  /// allowed, as it runs code too. A chain with no guard is
+  /// `reader_without_ignore_no_connection`'s to report.
   void _check(Expression expression) {
-    MethodInvocation? unsafe;
+    SimpleIdentifier? unsafe;
     Expression? current = expression;
     while (current != null) {
       switch (current) {
@@ -91,13 +93,18 @@ class _Visitor extends SimpleAstVisitor<void> {
             return;
           }
           if (!_isSafe(current)) {
-            unsafe = current;
+            unsafe = current.methodName;
           }
+          current = current.target;
+        case PropertyAccess():
+          unsafe = current.propertyName;
           current = current.target;
         case ParenthesizedExpression():
           current = current.expression;
-        case PropertyAccess():
-          current = current.target;
+        case AsExpression():
+          current = current.expression;
+        case ExtensionOverride():
+          current = extendedExpression(current);
         case ConditionalExpression():
           // An operator after the whole conditional runs after the guard of
           // whichever branch has one.
@@ -117,8 +124,8 @@ class _Visitor extends SimpleAstVisitor<void> {
     }
   }
 
-  void _report(MethodInvocation operator) {
-    rule.reportAtNode(operator.methodName, arguments: <Object>[operator.methodName.name]);
+  void _report(SimpleIdentifier operator) {
+    rule.reportAtNode(operator, arguments: <Object>[operator.name]);
   }
 
   bool _isSafe(MethodInvocation node) {

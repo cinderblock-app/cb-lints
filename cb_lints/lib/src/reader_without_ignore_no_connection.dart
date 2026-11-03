@@ -74,8 +74,9 @@ class _Visitor extends SimpleAstVisitor<void> {
 
 /// Whether the stream [expression] gives goes through `ignoreNoConnection()`.
 ///
-/// Follows the call chain only: a call inside a closure further up, such as in
-/// an `asyncMap`, does not guard the stream being yielded.
+/// Follows the call chain only, through parentheses, casts and extension
+/// overrides: a call inside a closure further up, such as in an `asyncMap`,
+/// does not guard the stream being yielded.
 bool goesThroughIgnoreNoConnection(Expression expression) {
   Expression? current = expression;
   while (current != null) {
@@ -87,6 +88,10 @@ bool goesThroughIgnoreNoConnection(Expression expression) {
         current = current.target;
       case ParenthesizedExpression():
         current = current.expression;
+      case AsExpression():
+        current = current.expression;
+      case ExtensionOverride():
+        current = extendedExpression(current);
       case PropertyAccess():
         current = current.target;
       case ConditionalExpression():
@@ -97,6 +102,13 @@ bool goesThroughIgnoreNoConnection(Expression expression) {
     }
   }
   return false;
+}
+
+/// The receiver an extension override such as `IgnoreErrorExtension(stream)`
+/// applies its member to, which the chain continues from.
+Expression? extendedExpression(ExtensionOverride override) {
+  final NodeList<Argument> arguments = override.argumentList.arguments;
+  return arguments.isEmpty ? null : arguments.first.argumentExpression;
 }
 
 /// Whether the chain in [expression] starts from an `await`, which throws offline
@@ -111,6 +123,10 @@ bool startsFromAwait(Expression? expression) {
         current = current.target;
       case ParenthesizedExpression():
         current = current.expression;
+      case AsExpression():
+        current = current.expression;
+      case ExtensionOverride():
+        current = extendedExpression(current);
       case PropertyAccess():
         current = current.target;
       default:
