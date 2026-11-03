@@ -3,6 +3,7 @@ import 'package:analysis_server_plugin/registry.dart';
 import 'package:cb_lints/src/add_ignore_no_connection.dart';
 import 'package:cb_lints/src/api_class_in_presentation.dart';
 import 'package:cb_lints/src/connectivity_event_outside_app_epics.dart';
+import 'package:cb_lints/src/memo_distinct_needs_identity_equality.dart';
 import 'package:cb_lints/src/memo_input_is_collection_field.dart';
 import 'package:cb_lints/src/platform_check_outside_platform_support.dart';
 import 'package:cb_lints/src/reader_call_after_ignore_no_connection.dart';
@@ -23,6 +24,7 @@ class CbLintsPlugin extends Plugin {
     // analysis_options.yaml.
     registry.registerWarningRule(ApiClassInPresentation());
     registry.registerWarningRule(ConnectivityEventOutsideAppEpics());
+    registry.registerWarningRule(MemoDistinctNeedsIdentityEquality());
     registry.registerWarningRule(MemoInputIsCollectionField());
     registry.registerWarningRule(PlatformCheckOutsidePlatformSupport());
     registry.registerWarningRule(ReaderCallAfterIgnoreNoConnection());
